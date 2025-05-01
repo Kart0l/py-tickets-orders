@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db.utils import IntegrityError
 
 from cinema.models import (
     Genre,
@@ -42,6 +43,12 @@ class MovieListSerializer(MovieSerializer):
     actors = serializers.SlugRelatedField(
         many=True, read_only=True, slug_field="full_name"
     )
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["genres"] = sorted(data["genres"])
+        data["actors"] = sorted(data["actors"])
+        return data
 
 
 class MovieDetailSerializer(MovieSerializer):
@@ -94,10 +101,13 @@ class MovieSessionDetailSerializer(MovieSessionSerializer):
         fields = ("id", "show_time", "movie", "cinema_hall", "taken_places")
 
     def get_taken_places(self, obj):
-        return [
-            {"row": ticket.row, "seat": ticket.seat}
-            for ticket in obj.tickets.all()
-        ]
+        return sorted(
+            [
+                {"row": ticket.row, "seat": ticket.seat}
+                for ticket in obj.tickets.all()
+            ],
+            key=lambda x: (x["row"], x["seat"])
+        )
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -123,7 +133,7 @@ class OrderSerializer(serializers.ModelSerializer):
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
-    tickets = TicketCreateSerializer(many=True)
+    tickets = TicketCreateSerializer(many=True, write_only=True)
 
     class Meta:
         model = Order
@@ -132,6 +142,22 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         tickets_data = validated_data.pop("tickets")
         order = Order.objects.create(user=self.context["request"].user)
+
         for ticket_data in tickets_data:
-            Ticket.objects.create(order=order, **ticket_data)
+            try:
+                Ticket.objects.create(order=order, **ticket_data)
+            except IntegrityError:
+                order.delete()
+                raise serializers.ValidationError(
+                    "Ticket for this seat and session already exists"
+                )
+
         return order
+
+
+class OrderListSerializer(serializers.ModelSerializer):
+    tickets = TicketSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Order
+        fields = ("id", "tickets", "created_at")

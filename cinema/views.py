@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q
 from datetime import datetime
+from rest_framework.response import Response
 
 from cinema.models import (
     Genre,
@@ -24,33 +25,37 @@ from cinema.serializers import (
     MovieSessionDetailSerializer,
     OrderSerializer,
     OrderCreateSerializer,
+    OrderListSerializer,
 )
 
 
-class GenreViewSet(viewsets.ModelViewSet):
+class PaginatedViewSet(viewsets.ModelViewSet):
+    def get_paginated_response(self, data):
+        if self.paginator and self.request.query_params.get("page", None):
+            return self.paginator.get_paginated_response(data)
+        return Response(data)
+
+
+class GenreViewSet(PaginatedViewSet):
     queryset = Genre.objects.all()
     serializer_class = GenreSerializer
-    pagination_class = None
 
 
-class ActorViewSet(viewsets.ModelViewSet):
+class ActorViewSet(PaginatedViewSet):
     queryset = Actor.objects.all()
     serializer_class = ActorSerializer
-    pagination_class = None
 
 
-class CinemaHallViewSet(viewsets.ModelViewSet):
+class CinemaHallViewSet(PaginatedViewSet):
     queryset = CinemaHall.objects.all()
     serializer_class = CinemaHallSerializer
-    pagination_class = None
 
 
-class MovieViewSet(viewsets.ModelViewSet):
+class MovieViewSet(PaginatedViewSet):
     queryset = Movie.objects.all()
     serializer_class = MovieSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     search_fields = ["title"]
-    pagination_class = None
 
     def get_queryset(self):
         queryset = Movie.objects.all()
@@ -63,17 +68,17 @@ class MovieViewSet(viewsets.ModelViewSet):
         if genres and genres[0]:
             try:
                 genre_ids = [int(g) for g in genres]
-                queryset = queryset.filter(genres__id__in=genre_ids)
+                queryset = queryset.filter(genres__id__in=genre_ids).distinct()
             except (ValueError, TypeError):
                 return Movie.objects.none()
         if actors and actors[0]:
             try:
                 actor_ids = [int(a) for a in actors]
-                queryset = queryset.filter(actors__id__in=actor_ids)
+                queryset = queryset.filter(actors__id__in=actor_ids).distinct()
             except (ValueError, TypeError):
                 return Movie.objects.none()
 
-        return queryset.distinct()
+        return queryset
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -83,11 +88,10 @@ class MovieViewSet(viewsets.ModelViewSet):
         return MovieSerializer
 
 
-class MovieSessionViewSet(viewsets.ModelViewSet):
+class MovieSessionViewSet(PaginatedViewSet):
     queryset = MovieSession.objects.all()
     serializer_class = MovieSessionSerializer
     filter_backends = [DjangoFilterBackend]
-    pagination_class = None
 
     def get_queryset(self):
         queryset = MovieSession.objects.all()
@@ -99,13 +103,13 @@ class MovieSessionViewSet(viewsets.ModelViewSet):
                 date_obj = datetime.strptime(date, "%Y-%m-%d").date()
                 queryset = queryset.filter(show_time__date=date_obj)
             except ValueError:
-                pass
+                return MovieSession.objects.none()
         if movie is not None:
             try:
                 movie_id = int(movie)
                 queryset = queryset.filter(movie_id=movie_id)
             except ValueError:
-                pass
+                return MovieSession.objects.none()
 
         return queryset
 
@@ -117,15 +121,14 @@ class MovieSessionViewSet(viewsets.ModelViewSet):
         return MovieSessionSerializer
 
 
-class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.all()
-    serializer_class = OrderSerializer
+class OrderViewSet(PaginatedViewSet):
+    serializer_class = OrderCreateSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         return Order.objects.filter(user=self.request.user)
 
     def get_serializer_class(self):
-        if self.action == "create":
-            return OrderCreateSerializer
-        return OrderSerializer
+        if self.action == "list":
+            return OrderListSerializer
+        return OrderCreateSerializer
